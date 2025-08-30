@@ -1,0 +1,30 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.env
+.venv/
+env/
+ENV/
+
+# IDE / editor settings
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Flask / app specific
+instance/
+*.db
+*.sqlite3
+*.log
+
+# Packet captures (don’t upload real sniffed data)
+*.pcap
+*.pcapng

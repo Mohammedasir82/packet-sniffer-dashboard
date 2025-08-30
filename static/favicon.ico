@@ -1,0 +1,16 @@
+from flask import Flask, send_from_directory, render_template
+
+app = Flask(__name__)
+
+# Serve favicon
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory('static', 'favicon.ico', mimetype='image/x-icon')
+
+# Example route for your dashboard
+@app.route('/')
+def dashboard():
+    return render_template('index.html')  # your dashboard HTML
+
+if __name__ == '__main__':
+    app.run(debug=True)

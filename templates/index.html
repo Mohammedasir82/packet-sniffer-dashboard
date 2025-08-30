@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Packet Sniffer Dashboard</title>
+
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body { background-color: #f8f9fa; }
+    .card { border-radius: 1rem; }
+    .table-responsive { max-height: 420px; overflow-y: auto; }
+    .navbar-brand { font-size: 1.1rem; }
+  </style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow-sm">
+  <div class="container-fluid">
+    <a class="navbar-brand fw-bold" href="#">📡 Packet Sniffer Dashboard</a>
+  </div>
+</nav>
+
+<div class="container">
+
+  <!-- Filters -->
+  <div class="row g-3 mb-4">
+    <div class="col-md-2">
+      <label for="protocolFilter" class="form-label fw-semibold">Protocol</label>
+      <select id="protocolFilter" class="form-select">
+        <option value="">All</option>
+        <option value="TCP">TCP</option>
+        <option value="UDP">UDP</option>
+        <option value="ICMP">ICMP</option>
+        <option value="IP">IP</option>
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label for="srcFilter" class="form-label fw-semibold">Source IP</label>
+      <input id="srcFilter" class="form-control" placeholder="192.168.x.x"/>
+    </div>
+    <div class="col-md-3">
+      <label for="dstFilter" class="form-label fw-semibold">Destination IP</label>
+      <input id="dstFilter" class="form-control" placeholder="192.168.x.x"/>
+    </div>
+    <div class="col-md-2 d-flex align-items-end">
+      <button id="applyBtn" class="btn btn-primary w-100">Apply Filters</button>
+    </div>
+    <div class="col-md-2 d-flex align-items-end">
+      <button id="clearBtn" class="btn btn-outline-secondary w-100">Clear Filters</button>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="row g-4 mb-4">
+    <div class="col-md-4">
+      <div class="card shadow-sm p-3">
+        <h6 class="card-title fw-semibold mb-3">Protocol Distribution</h6>
+        <canvas id="protocolChart"></canvas>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm p-3">
+        <h6 class="card-title fw-semibold mb-3">Top Source IPs</h6>
+        <canvas id="topSrcChart"></canvas>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm p-3">
+        <h6 class="card-title fw-semibold mb-3">Top Destination IPs</h6>
+        <canvas id="topDstChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Packet Table -->
+  <div class="row mb-4">
+    <div class="col">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h5 class="card-title fw-bold">Recent Packets</h5>
+          <p id="filterInfo" class="text-muted small"></p>
+          <div class="table-responsive">
+            <table class="table table-striped table-hover table-sm align-middle" id="packetTable">
+              <thead class="table-dark">
+                <tr>
+                  <th>ID</th><th>Timestamp</th><th>Source</th><th>Destination</th>
+                  <th>Protocol</th><th>Src Port</th><th>Dst Port</th><th>Length</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="text-end mt-2">
+            <a id="exportBtn" href="/export/csv" class="btn btn-success fw-semibold">📥 Export CSV</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let protocolChart, topSrcChart, topDstChart;
+
+// Format IP fields to always start with 192.168
+function formatPrivateIP(input) {
+  input.addEventListener('input', () => {
+    let val = input.value.replace(/[^0-9.]/g, '');
+    let parts = val.split('.').slice(0, 4);
+    parts = parts.map((p, i) => {
+      let n = parseInt(p);
+      if (isNaN(n) || n < 0) n = 0;
+      if (n > 255) n = 255;
+      return n;
+    });
+    if (parts.length > 0) parts[0] = 192;
+    if (parts.length > 1) parts[1] = 168;
+    input.value = parts.join('.');
+  });
+}
+
+formatPrivateIP(document.getElementById('srcFilter'));
+formatPrivateIP(document.getElementById('dstFilter'));
+
+function getFilters() {
+  const src = document.getElementById('srcFilter').value.trim();
+  const dst = document.getElementById('dstFilter').value.trim();
+  const ipRegex = /^192\.168\.\d{1,3}\.\d{1,3}$/;
+
+  if (src && !ipRegex.test(src)) { alert('Source IP must be in 192.168.x.x range'); return null; }
+  if (dst && !ipRegex.test(dst)) { alert('Destination IP must be in 192.168.x.x range'); return null; }
+
+  return {
+    proto: document.getElementById('protocolFilter').value.trim(),
+    src,
+    dst
+  };
+}
+
+function clearFilters() {
+  document.getElementById('protocolFilter').value = '';
+  document.getElementById('srcFilter').value = '';
+  document.getElementById('dstFilter').value = '';
+  refreshData();
+}
+
+function qs(params) {
+  const q = new URLSearchParams();
+  if (params.proto) q.set('proto', params.proto);
+  if (params.src) q.set('src', params.src);
+  if (params.dst) q.set('dst', params.dst);
+  return q.toString() ? `?${q.toString()}` : '';
+}
+
+// Chart updater
+function updateChart(chart, type, labels, data, color) {
+  if (!chart) {
+    return new Chart(document.getElementById(type), {
+      type: type === 'protocolChart' ? 'pie' : 'bar',
+      data: { labels, datasets: [{ label: 'Packet Count', data, backgroundColor: type === 'protocolChart' ? ['#FF6384','#36A2EB','#FFCE56','#4BC0C0','#9966FF','#FF9F40'] : color }] },
+      options: { responsive: true, plugins: { legend: { display: type === 'protocolChart', position: 'bottom' } }, scales: type !== 'protocolChart' ? { y: { beginAtZero: true } } : {} }
+    });
+  } else {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = data;
+    chart.update();
+    return chart;
+  }
+}
+
+async function fetchStats() {
+  const res = await fetch(`/api/stats${qs(getFilters())}`, { cache: 'no-store' });
+  const data = await res.json();
+  protocolChart = updateChart(protocolChart, 'protocolChart', Object.keys(data.protocols || {}), Object.values(data.protocols || {}));
+  topSrcChart = updateChart(topSrcChart, 'topSrcChart', (data.top_src || []).map(x => x.src), (data.top_src || []).map(x => x.count), '#36A2EB');
+  topDstChart = updateChart(topDstChart, 'topDstChart', (data.top_dst || []).map(x => x.dst), (data.top_dst || []).map(x => x.count), '#FF6384');
+}
+
+async function fetchPackets() {
+  const res = await fetch(`/api/packets${qs(getFilters())}`, { cache: 'no-store' });
+  const packets = await res.json();
+
+  const tbody = document.querySelector('#packetTable tbody');
+  tbody.innerHTML = (packets || []).map(p => `
+    <tr>
+      <td>${p.id}</td><td>${p.timestamp}</td><td>${p.src}</td><td>${p.dst}</td>
+      <td>${p.proto}</td><td>${p.sport ?? ''}</td><td>${p.dport ?? ''}</td><td>${p.length}</td>
+    </tr>`).join('');
+
+  let info = 'Showing latest 100 packets';
+  const f = getFilters(), filters = [];
+  if (!f) return;
+  if (f.proto) filters.push(`Protocol = ${f.proto}`);
+  if (f.src) filters.push(`Source = ${f.src}`);
+  if (f.dst) filters.push(`Destination = ${f.dst}`);
+  if (filters.length) info += ` (filters: ${filters.join(', ')})`;
+  document.getElementById('filterInfo').textContent = info;
+  document.getElementById('exportBtn').href = `/export/csv${qs(f)}`;
+}
+
+function refreshData() {
+  const f = getFilters();
+  if (!f) return;
+  fetchStats();
+  fetchPackets();
+}
+
+document.getElementById('applyBtn').addEventListener('click', refreshData);
+document.getElementById('clearBtn').addEventListener('click', clearFilters);
+
+setInterval(refreshData, 5000);
+refreshData();
+</script>
+</body>
+</html>
